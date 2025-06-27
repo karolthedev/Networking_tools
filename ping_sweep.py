@@ -1,0 +1,121 @@
+import netifaces
+import ipaddress
+import subprocess
+import platform
+import threading
+import time
+import re
+
+
+
+def get_local_subnet():
+    gateways = netifaces.gateways()
+    iface = gateways['default'][netifaces.AF_INET][1]
+    iface_info = netifaces.ifaddresses(iface)[netifaces.AF_INET][0]
+    ip = iface_info['addr']
+    netmask = iface_info['netmask']
+    network = ipaddress.IPv4Network(f"{ip}/{netmask}", strict=False)
+    return str(iface), network
+
+def ping_host(ip):
+    system = platform.system().lower()
+
+    if system == "windows":
+        # Windows: -n for count, -w for timeout in milliseconds
+        cmd = ['ping', '-n', '1', '-w', '1000', ip]
+    else:
+        # Linux/macOS: -c for count, -W for timeout in seconds
+        cmd = ['ping', '-c', '1', '-W', '1', ip]
+
+    # Use subprocess.DEVNULL to suppress output (cross-platform)
+    return subprocess.call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
+
+def async_ping_sweep(ip_list, timeout=2):
+    online_hosts = []
+    lock = threading.Lock()
+
+    def ping_and_store(ip):
+        if ping_host(ip):
+            with lock:
+                online_hosts.append(ip)
+
+    threads = []
+    for ip in ip_list:
+        t = threading.Thread(target=ping_and_store, args=(str(ip),))
+        t.start()
+        threads.append(t)
+
+    # Wait for timeout duration, then terminate stragglers
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if all(not t.is_alive() for t in threads):
+            break
+        time.sleep(0.1)
+
+    return online_hosts
+
+def get_mac_from_arp(ip):
+    try:
+        output = subprocess.check_output(['arp', '-n', ip], encoding='utf-8')
+        for line in output.splitlines():
+            if ip in line:
+                parts = line.split()
+                return parts[2] if len(parts) >= 3 else "Unknown"
+    except subprocess.CalledProcessError:
+        pass
+    return "Unknown"
+
+
+def scan_local():
+    iface, network = get_local_subnet()
+    print(f"\nPerforming ping sweep on local subnet: {network}")
+
+    # Grab all usable IPs in the subnet
+    ip_list = list(network.hosts())  # excludes network and broadcast addresses
+
+    # Use your multithreaded ping sweep
+    live_hosts = async_ping_sweep(ip_list, timeout=2)
+
+    # Sort IPs numerically (not lexically)
+    live_hosts.sort(key=lambda ip: ipaddress.IPv4Address(ip))
+
+    print(f"\n{'IP':<16}    {'MAC':<10}")
+    print("-" * 30)
+    for ip in live_hosts:
+        mac = get_mac_from_arp(str(ip))
+        print(f"{ip:<16}    {mac:<18}")
+
+
+
+def scan_remote(start_ip, end_ip):
+    start = ipaddress.IPv4Address(start_ip)
+    end = ipaddress.IPv4Address(end_ip)
+    ip_list = [ipaddress.IPv4Address(ip) for ip in range(int(start), int(end) + 1)]
+    
+    print(f"\nPinging hosts from {start_ip} to {end_ip}...\nPlease wait...")
+    live_hosts = async_ping_sweep(ip_list, timeout=2)
+
+    print(f"\n{'IP':<16}    {'Status':<10}")
+    print("-" * 30)
+    for ip in ip_list:
+        status = "Online" if str(ip) in live_hosts else "Offline"
+        print(f"{ip:<16}    {status:<10}")
+
+# Main
+print("Ping Sweep Utility")
+print("1. Local Network Scan")
+print("2. Remote Range Scan")
+choice = input("Choose an option [1/2]: ").strip()
+
+if choice == '1':
+    scan_local()
+elif choice == '2':
+    ip_range = input("Enter IP range (e.g., 8.8.4.4 - 8.8.8.8): ").strip()
+    match = re.match(r"(\d+\.\d+\.\d+\.\d+)\s*-\s*(\d+\.\d+\.\d+\.\d+)", ip_range)
+    if match:
+        start_ip, end_ip = match.groups()
+        scan_remote(start_ip, end_ip)
+    else:
+        print("Invalid range format. Use format like 192.168.1.10 - 192.168.1.50")
+else:
+    print("Invalid choice.")
