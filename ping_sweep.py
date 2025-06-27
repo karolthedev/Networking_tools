@@ -92,20 +92,37 @@ def scan_local():
         print(f"{ip:<16}    {mac or 'N/A':<18}")
 
 
-
 def scan_remote(start_ip, end_ip):
+    # Build IPv4Address list
     start = ipaddress.IPv4Address(start_ip)
-    end = ipaddress.IPv4Address(end_ip)
-    ip_list = [ipaddress.IPv4Address(ip) for ip in range(int(start), int(end) + 1)]
-    
-    print(f"\nPinging hosts from {start_ip} to {end_ip}...\nPlease wait...")
-    live_hosts = async_ping_sweep(ip_list, timeout=2)
+    end   = ipaddress.IPv4Address(end_ip)
+    ip_list = [ipaddress.IPv4Address(i) for i in range(int(start), int(end) + 1)]
 
+    print(f"\nPinging hosts from {start_ip} to {end_ip}...\nPlease wait...")
+    live_hosts = set(async_ping_sweep([str(ip) for ip in ip_list], timeout=2))
+
+    # Prepare a list of (ip_str, status) tuples
+    results = []
+    for ip in ip_list:
+        ip_str = str(ip)
+        status = "Online" if ip_str in live_hosts else "Offline"
+        results.append((ip_str, status))
+
+    # Sort so Online come first, then Offline; within each group sort by IP
+    results.sort(
+        key=lambda item: (
+            item[1] != "Online",               # False (Online) < True (Offline)
+            ipaddress.IPv4Address(item[0])     # numeric IP sort
+        )
+    )
+
+    # Print
     print(f"\n{'IP':<16}    {'Status':<10}")
     print("-" * 30)
-    for ip in ip_list:
-        status = "Online" if str(ip) in live_hosts else "Offline"
-        print(f"{ip:<16}    {status:<10}")
+    for ip_str, status in results:
+        print(f"{ip_str:<16}    {status:<10}")
+
+
 
 # Main
 print("Ping Sweep Utility")
