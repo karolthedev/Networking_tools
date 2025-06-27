@@ -5,7 +5,7 @@ import platform
 import threading
 import time
 import re
-
+from scapy.all import ARP, Ether, srp
 
 
 def get_local_subnet():
@@ -54,16 +54,22 @@ def async_ping_sweep(ip_list, timeout=2):
 
     return online_hosts
 
-def get_mac_from_arp(ip):
-    try:
-        output = subprocess.check_output(['arp', '-n', ip], encoding='utf-8')
-        for line in output.splitlines():
-            if ip in line:
-                parts = line.split()
-                return parts[2] if len(parts) >= 3 else "Unknown"
-    except subprocess.CalledProcessError:
-        pass
-    return "Unknown"
+def get_mac_from_arp(ip, timeout=1):
+    """
+    Send a single ARP request to `ip` and return its MAC in uppercase, no-colon form.
+    Returns None if nobody answers.
+    """
+    # build Ethernet/ARP packet
+    pkt = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=ip)
+    # srp: send & receive at layer 2
+    answered, _ = srp(pkt, timeout=timeout, verbose=False)
+    
+    for _, reply in answered:
+        # reply is an Ether/ARP object; .src on the Ether layer is the MAC
+        mac = reply.src
+        # format: strip separators, uppercase
+        return mac.replace(":", "").replace("-", "").upper()
+    return None
 
 
 def scan_local():
@@ -83,7 +89,7 @@ def scan_local():
     print("-" * 30)
     for ip in live_hosts:
         mac = get_mac_from_arp(str(ip))
-        print(f"{ip:<16}    {mac:<18}")
+        print(f"{ip:<16}    {mac or 'N/A':<18}")
 
 
 
